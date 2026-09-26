@@ -1,7 +1,8 @@
 //! Move legality, making moves, and legal move generation — all proven to match `spec`.
 //!
 //! This is the straightforward "reference" implementation: legal move generation
-//! tries every (from, to, promotion) candidate and keeps the legal ones.
+//! tries every (from, to) candidate, with only the promotions `promotion_ok` admits,
+//! and keeps the legal ones.
 use crate::attacks::*;
 use crate::position::*;
 #[cfg(verus_only)]
@@ -381,8 +382,13 @@ pub fn legal_moves_exec(pos: &Position) -> (moves: Vec<Move>)
             lemma_square_index(i as int);
         }
         assert(from == square_of_index(i as int));
-        let own_piece = match get_sq(&pos.board, from) {
+        let piece = get_sq(&pos.board, from);
+        let own_piece = match piece {
             Some(p) => color_eq(p.color, pos.turn),
+            None => false,
+        };
+        let pawn = match piece {
+            Some(p) => kind_eq(p.kind, PieceKind::Pawn),
             None => false,
         };
         let mut j: u8 = 0;
@@ -398,7 +404,9 @@ pub fn legal_moves_exec(pos: &Position) -> (moves: Vec<Move>)
                 sq_index(from) == i,
                 valid_square(from),
                 !own_piece ==> j == 64,
-                own_piece == (moving_piece(pos@, Move { from, to: from, promotion: None }) matches Some(p) && p.color == pos.turn),
+                piece == piece_at(pos@.board, from),
+                own_piece == (piece matches Some(p) && p.color == pos.turn),
+                pawn == (piece matches Some(p) && p.kind == PieceKind::Pawn),
                 forall|m: Move| #[trigger] moves@.contains(m) <==> is_legal(pos@, m) && visited(m, i as int, j as int),
                 forall|k: int| 0 <= k < moves@.len() ==> visited(#[trigger] moves@[k], i as int, j as int),
                 moves@.no_duplicates(),
@@ -409,11 +417,17 @@ pub fn legal_moves_exec(pos: &Position) -> (moves: Vec<Move>)
                 lemma_square_index(j as int);
             }
             let ghost old_moves = moves@;
-            try_push(pos, Move { from, to, promotion: None }, &mut moves);
-            try_push(pos, Move { from, to, promotion: Some(PieceKind::Knight) }, &mut moves);
-            try_push(pos, Move { from, to, promotion: Some(PieceKind::Bishop) }, &mut moves);
-            try_push(pos, Move { from, to, promotion: Some(PieceKind::Rook) }, &mut moves);
-            try_push(pos, Move { from, to, promotion: Some(PieceKind::Queen) }, &mut moves);
+            // `promotion_ok` allows exactly one shape of promotion for a given (from, to):
+            // N/B/R/Q for a pawn reaching the last rank, none otherwise. Only try those.
+            let promotes = pawn && to.rank as i32 == promotion_rank_exec(pos.turn);
+            if promotes {
+                try_push(pos, Move { from, to, promotion: Some(PieceKind::Knight) }, &mut moves);
+                try_push(pos, Move { from, to, promotion: Some(PieceKind::Bishop) }, &mut moves);
+                try_push(pos, Move { from, to, promotion: Some(PieceKind::Rook) }, &mut moves);
+                try_push(pos, Move { from, to, promotion: Some(PieceKind::Queen) }, &mut moves);
+            } else {
+                try_push(pos, Move { from, to, promotion: None }, &mut moves);
+            }
             proof {
                 assert forall|m: Move| #[trigger] moves@.contains(m) <==> is_legal(pos@, m) && visited(m, i as int, j + 1) by {
                     if is_legal(pos@, m) {
@@ -423,6 +437,8 @@ pub fn legal_moves_exec(pos: &Position) -> (moves: Vec<Move>)
                         if sq_index(m.from) == i && sq_index(m.to) == j {
                             assert(m.from == from);
                             assert(m.to == to);
+                            assert(promotion_ok(piece->Some_0, m));
+                            assert(m.promotion is Some <==> promotes);
                         }
                     }
                     if moves@.contains(m) && !old_moves.contains(m) {

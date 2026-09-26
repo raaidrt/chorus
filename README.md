@@ -15,8 +15,8 @@ A chess engine whose rules implementation is formally verified with [Verus](http
 | `src/fen.rs` | FEN / UCI parsing and printing. | ✗ (I/O glue) |
 
 The implementation is deliberately naive (legal move generation tries every
-from/to/promotion candidate). It is the reference to optimize against later: any
-faster implementation only has to prove the same `ensures` clauses.
+from/to candidate, with the promotions `promotion_ok` admits). It is the reference
+to optimize against later: any faster implementation only has to prove the same `ensures` clauses.
 
 Agents (and humans) working on the implementation must follow [`AGENTS.md`](AGENTS.md):
 the specification is read-only and every implementation must be proven against it.
