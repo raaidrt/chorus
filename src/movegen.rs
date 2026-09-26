@@ -409,11 +409,21 @@ pub fn legal_moves_exec(pos: &Position) -> (moves: Vec<Move>)
                 lemma_square_index(j as int);
             }
             let ghost old_moves = moves@;
-            try_push(pos, Move { from, to, promotion: None }, &mut moves);
-            try_push(pos, Move { from, to, promotion: Some(PieceKind::Knight) }, &mut moves);
-            try_push(pos, Move { from, to, promotion: Some(PieceKind::Bishop) }, &mut moves);
-            try_push(pos, Move { from, to, promotion: Some(PieceKind::Rook) }, &mut moves);
-            try_push(pos, Move { from, to, promotion: Some(PieceKind::Queen) }, &mut moves);
+            // Promotion is mandatory only for a pawn reaching its final rank.
+            // Every other move has exactly one possible promotion field: None.
+            let promotes = match get_sq(&pos.board, from) {
+                Some(p) => kind_eq(p.kind, PieceKind::Pawn)
+                    && to.rank as i32 == promotion_rank_exec(p.color),
+                None => false,
+            };
+            if promotes {
+                try_push(pos, Move { from, to, promotion: Some(PieceKind::Knight) }, &mut moves);
+                try_push(pos, Move { from, to, promotion: Some(PieceKind::Bishop) }, &mut moves);
+                try_push(pos, Move { from, to, promotion: Some(PieceKind::Rook) }, &mut moves);
+                try_push(pos, Move { from, to, promotion: Some(PieceKind::Queen) }, &mut moves);
+            } else {
+                try_push(pos, Move { from, to, promotion: None }, &mut moves);
+            }
             proof {
                 assert forall|m: Move| #[trigger] moves@.contains(m) <==> is_legal(pos@, m) && visited(m, i as int, j + 1) by {
                     if is_legal(pos@, m) {
