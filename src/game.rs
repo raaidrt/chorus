@@ -214,38 +214,98 @@ pub fn insufficient_material_exec(b: &[Option<Piece>; 64]) -> (res: bool)
 // Repetition
 // ---------------------------------------------------------------------------
 
+/// Is the en-passant capture from `from` to `to` (with any allowed promotion) legal?
+fn ep_capture_legal(pos: &Position, from: Square, to: Square) -> (res: bool)
+    requires
+        valid_square(from),
+        valid_square(to),
+    ensures
+        res == exists|m: Move| m.from == from && m.to == to && is_legal(pos@, m) && is_en_passant(pos@, m),
+{
+    let base = Move { from, to, promotion: None };
+    if !is_en_passant_exec(pos, base) {
+        // Whether a move is en passant does not depend on its promotion.
+        assert forall|m: Move| m.from == from && m.to == to implies !is_en_passant(pos@, m) by {}
+        return false;
+    }
+    let promotes = to.rank as i32 == promotion_rank_exec(pos.turn);
+    if promotes {
+        let res = is_legal_exec(pos, Move { from, to, promotion: Some(PieceKind::Knight) })
+            || is_legal_exec(pos, Move { from, to, promotion: Some(PieceKind::Bishop) })
+            || is_legal_exec(pos, Move { from, to, promotion: Some(PieceKind::Rook) })
+            || is_legal_exec(pos, Move { from, to, promotion: Some(PieceKind::Queen) });
+        proof {
+            if !res {
+                assert forall|m: Move| m.from == from && m.to == to && is_en_passant(pos@, m) implies !is_legal(pos@, m) by {
+                    if is_legal(pos@, m) {
+                        lemma_legal_promotion(pos@, m);
+                    }
+                }
+            } else {
+                if is_legal(pos@, Move { from, to, promotion: Some(PieceKind::Knight) }) {
+                    assert(is_en_passant(pos@, Move { from, to, promotion: Some(PieceKind::Knight) }));
+                } else if is_legal(pos@, Move { from, to, promotion: Some(PieceKind::Bishop) }) {
+                    assert(is_en_passant(pos@, Move { from, to, promotion: Some(PieceKind::Bishop) }));
+                } else if is_legal(pos@, Move { from, to, promotion: Some(PieceKind::Rook) }) {
+                    assert(is_en_passant(pos@, Move { from, to, promotion: Some(PieceKind::Rook) }));
+                } else {
+                    assert(is_en_passant(pos@, Move { from, to, promotion: Some(PieceKind::Queen) }));
+                }
+            }
+        }
+        res
+    } else {
+        let res = is_legal_exec(pos, base);
+        proof {
+            if res {
+                assert(is_en_passant(pos@, base));
+            } else {
+                assert forall|m: Move| m.from == from && m.to == to && is_en_passant(pos@, m) implies !is_legal(pos@, m) by {
+                    if is_legal(pos@, m) {
+                        lemma_legal_promotion(pos@, m);
+                    }
+                }
+            }
+        }
+        res
+    }
+}
+
+/// Only the (at most two) pawns beside the pawn that just double-pushed can capture en passant.
 pub fn en_passant_available_exec(pos: &Position) -> (res: bool)
     ensures
         res == en_passant_available(pos@),
 {
-    if pos.ep.is_none() {
+    let to = match pos.ep {
+        None => {
+            return false;
+        },
+        Some(s) => s,
+    };
+    if !(to.file < 8 && to.rank < 8) {
         return false;
     }
-    let moves = legal_moves_exec(pos);
-    let mut k: usize = 0;
-    while k < moves.len()
-        invariant
-            0 <= k <= moves@.len(),
-            forall|m: Move| #[trigger] moves@.contains(m) <==> is_legal(pos@, m),
-            forall|k2: int| 0 <= k2 < k ==> !is_en_passant(pos@, #[trigger] moves@[k2]),
-        decreases moves@.len() - k,
-    {
-        let m = moves[k];
-        assert(moves@.contains(m));
-        proof {
-            lemma_legal_promotion(pos@, m);
-        }
-        if is_en_passant_exec(pos, m) {
-            return true;
-        }
-        k += 1;
+    let r = to.rank as i32 - forward_exec(pos.turn);
+    if !(0 <= r && r < 8) {
+        assert forall|m: Move| !(is_legal(pos@, m) && is_en_passant(pos@, m)) by {}
+        return false;
     }
-    assert forall|m: Move| !(is_legal(pos@, m) && is_en_passant(pos@, m)) by {
-        if is_legal(pos@, m) {
-            assert(moves@.contains(m));
+    let left = to.file > 0 && ep_capture_legal(pos, Square { file: to.file - 1, rank: r as u8 }, to);
+    let right = to.file < 7 && ep_capture_legal(pos, Square { file: to.file + 1, rank: r as u8 }, to);
+    proof {
+        if !(left || right) {
+            assert forall|m: Move| !(is_legal(pos@, m) && is_en_passant(pos@, m)) by {
+                if is_legal(pos@, m) && is_en_passant(pos@, m) {
+                    if m.from.file < to.file {
+                        assert(m.from == Square { file: (to.file - 1) as u8, rank: r as u8 });
+                    } else {
+                        assert(m.from == Square { file: (to.file + 1) as u8, rank: r as u8 });
+                    }
+                }
+            }
         }
     }
-    false
+    left || right
 }
 
 fn board_eq(a: &[Option<Piece>; 64], b: &[Option<Piece>; 64]) -> (res: bool)
