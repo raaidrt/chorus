@@ -1,19 +1,24 @@
 //! Per-move timing harness.
 //!
-//! Measures what one move costs the engine, both on a fixed corpus of positions and
-//! ply by ply along whole games:
+//! Measures what one move costs the engine, on a fixed corpus of positions, over 100 real
+//! Lichess games (`benches/data/lichess_games.txt`), and ply by ply along two of them:
 //!
 //! * `legal_moves/<pos>` — `legal_moves_exec` (per call, and per generated move)
 //! * `is_legal/<pos>`    — `is_legal_exec` on every legal move (per move)
 //! * `apply_move/<pos>`  — `apply_move_exec` on every legal move (per move)
 //! * `outcome/<pos>`     — `Game::outcome` (mate/stalemate/draw detection)
+//! * `lichess/<primitive>` — `legal_moves_exec` on every position of every game (per
+//!   position), `is_legal_exec` and `apply_move_exec` on every legal move of those
+//!   positions (per move)
+//! * `lichess/replay`    — all 100 games from the start, generating the legal moves,
+//!   playing the move and checking the outcome at every ply (per move)
 //! * `ply/<game>/<component>/<k>` — at ply `k` of a game: `legal_moves`, `play`
 //!   (`Game::play`), `outcome` (on the resulting game) and `step`, all three in sequence.
 //!
 //! Run with `cargo bench --bench per_move -- [options]`, and see `benches/README.md` for
 //! the methodology. Results go to `target/bench/per_move.json`, which
 //! `scripts/bench_report.py` turns into a Markdown report (tables and charts).
-use chess_engine::fen::{move_to_uci, parse_fen, parse_uci_move};
+use chess_engine::fen::move_to_uci;
 use chess_engine::game::Game;
 use chess_engine::movegen::{apply_move_exec, is_legal_exec, legal_moves_exec};
 use chess_engine::position::Position;
@@ -23,29 +28,11 @@ use std::io::IsTerminal;
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
-// ---------------------------------------------------------------------------
-// Workloads
-// ---------------------------------------------------------------------------
+mod common;
 
-/// Perft reference positions (see `tests/perft.rs`) with their known move counts, so a
-/// benchmark can never silently time the wrong thing.
-const POSITIONS: &[(&str, &str, usize)] = &[
-    ("start", "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", 20),
-    ("kiwipete", "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1", 48),
-    ("pos3_endgame", "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1", 14),
-    ("pos4_promotions", "r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1", 6),
-    ("pos5", "rnbq1k1r/pp1Pbppp/2p5/8/2B5/8/PPP1NnPP/RNBQK2R w KQ - 1 8", 44),
-    ("pos6_middlegame", "r4rk1/1pp1qppp/p1np1n2/2b1p1B1/2B1P1b1/P1NP1N2/1PP1QPPP/R4RK1 w - - 0 10", 46),
-];
+use common::{clone_game, game_positions, game_states, lichess_games, position, LichessGame, PLY_GAMES, POSITIONS};
 
-/// Morphy vs. Duke Karl / Count Isouard, Paris 1858 (the "Opera Game"), ending in mate.
-const OPERA_GAME: &str = "e2e4 e7e5 g1f3 d7d6 d2d4 c8g4 d4e5 g4f3 d1f3 d6e5 f1c4 g8f6 f3b3 d8e7 \
-     b1c3 c7c6 c1g5 b7b5 c3b5 c6b5 c4b5 b8d7 e1c1 a8d8 d1d7 d8d7 h1d1 e7e6 b5d7 f6d7 b3b8 d7b8 d1d8";
-
-/// Plies in the seeded random game (it stops earlier if the game ends).
-const RANDOM_GAME_PLIES: usize = 120;
-
-/// xorshift64*: a tiny deterministic PRNG, so every run times the same workload.
+/// xorshift64*: a tiny deterministic PRNG for the round order and the bootstrap.
 struct Rng(u64);
 
 impl Rng {
@@ -59,38 +46,6 @@ impl Rng {
     fn below(&mut self, n: usize) -> usize {
         (self.next() % n as u64) as usize
     }
-}
-
-fn opera_game() -> Vec<Move> {
-    OPERA_GAME.split_whitespace().map(|s| parse_uci_move(s).expect("bad UCI move")).collect()
-}
-
-fn random_game(seed: u64) -> Vec<Move> {
-    let mut rng = Rng(seed | 1);
-    let mut g = Game::new();
-    let mut moves = Vec::new();
-    while moves.len() < RANDOM_GAME_PLIES && g.outcome().is_none() {
-        let legal = legal_moves_exec(g.current());
-        let m = legal[rng.below(legal.len())];
-        assert!(g.play(m));
-        moves.push(m);
-    }
-    moves
-}
-
-/// Every prefix of a game: `states[k]` is the game after `k` plies.
-fn game_states(moves: &[Move]) -> Vec<Game> {
-    let mut g = Game::new();
-    let mut states = vec![clone_game(&g)];
-    for (k, &m) in moves.iter().enumerate() {
-        assert!(g.play(m), "illegal move {} at ply {k}", move_to_uci(m));
-        states.push(clone_game(&g));
-    }
-    states
-}
-
-fn clone_game(g: &Game) -> Game {
-    Game { history: g.history.clone() }
 }
 
 // ---------------------------------------------------------------------------
@@ -122,10 +77,9 @@ fn timed<I, O>(n: u64, input: &I, mut f: impl FnMut(&I) -> O) -> Duration {
 }
 
 fn corpus_benches(out: &mut Vec<Bench>) {
-    for &(name, fen, expected) in POSITIONS {
-        let pos = parse_fen(fen).unwrap();
+    for &(name, _, _) in POSITIONS {
+        let pos = position(name);
         let moves = legal_moves_exec(&pos);
-        assert_eq!(moves.len(), expected, "legal move count of {name}");
         let n = moves.len();
         let extra = vec![("position", format!("\"{name}\"")), ("moves", n.to_string())];
 
@@ -169,6 +123,80 @@ fn corpus_benches(out: &mut Vec<Bench>) {
             run: Box::new(move |iters| timed(iters, &g, |g| g.outcome())),
         });
     }
+}
+
+/// Benchmarks over the whole Lichess sample: each primitive swept over every position the
+/// games reach, and a full replay of every game, so the numbers are averages over the mix
+/// of openings, middlegames and endgames that real play produces.
+fn lichess_benches(games: &[LichessGame], out: &mut Vec<Bench>) {
+    let positions = game_positions(games);
+    let with_moves: Vec<(Position, Vec<Move>)> = positions.iter().map(|p| (*p, legal_moves_exec(p))).collect();
+    let moves: usize = with_moves.iter().map(|(_, ms)| ms.len()).sum();
+    let plies: usize = games.iter().map(|g| g.moves.len()).sum();
+    let extra = vec![
+        ("games", games.len().to_string()),
+        ("positions", positions.len().to_string()),
+        ("moves", moves.to_string()),
+        ("plies", plies.to_string()),
+    ];
+
+    out.push(Bench {
+        id: "lichess/legal_moves".into(),
+        units_per_iter: positions.len(),
+        unit: "position",
+        extra: extra.clone(),
+        run: Box::new(move |iters| {
+            timed(iters, &positions, |ps| {
+                for p in ps {
+                    black_box(legal_moves_exec(black_box(p)));
+                }
+            })
+        }),
+    });
+    let wm = with_moves.clone();
+    out.push(Bench {
+        id: "lichess/is_legal".into(),
+        units_per_iter: moves,
+        unit: "move",
+        extra: extra.clone(),
+        run: Box::new(move |iters| {
+            timed(iters, &wm, |wm| {
+                wm.iter().map(|(p, ms)| ms.iter().filter(|&&m| is_legal_exec(p, black_box(m))).count()).sum::<usize>()
+            })
+        }),
+    });
+    out.push(Bench {
+        id: "lichess/apply_move".into(),
+        units_per_iter: moves,
+        unit: "move",
+        extra: extra.clone(),
+        run: Box::new(move |iters| {
+            timed(iters, &with_moves, |wm| {
+                for (p, ms) in wm {
+                    for &m in ms {
+                        black_box(apply_move_exec(p, black_box(m)));
+                    }
+                }
+            })
+        }),
+    });
+    let all: Vec<Vec<Move>> = games.iter().map(|g| g.moves.clone()).collect();
+    out.push(Bench {
+        id: "lichess/replay".into(),
+        units_per_iter: plies,
+        unit: "move",
+        extra,
+        run: Box::new(move |iters| timed(iters, &all, |all| {
+            for moves in all {
+                let mut g = Game::new();
+                for &m in moves {
+                    black_box(legal_moves_exec(g.current()));
+                    assert!(g.play(black_box(m)));
+                    black_box(g.outcome());
+                }
+            }
+        })),
+    });
 }
 
 /// Per-ply benchmarks along a game. At ply `k` (the `k`-th move, from the game after `k`
@@ -463,8 +491,11 @@ fn main() {
 
     let mut benches = Vec::new();
     corpus_benches(&mut benches);
-    game_benches("opera", &opera_game(), &mut benches);
-    game_benches("random", &random_game(cfg.seed), &mut benches);
+    let games = lichess_games();
+    lichess_benches(&games, &mut benches);
+    for g in games.iter().filter(|g| PLY_GAMES.contains(&g.id)) {
+        game_benches(g.id, &g.moves, &mut benches);
+    }
     if let Some(f) = &cfg.filter {
         benches.retain(|b| b.id.contains(f.as_str()));
     }

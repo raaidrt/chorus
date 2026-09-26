@@ -6,6 +6,10 @@ edition = "2021"
 [dependencies]
 vstd = "=0.0.0-2026-09-20-0158"
 
+[dev-dependencies]
+# Divan, instrumented by CodSpeed when run under `cargo codspeed` (see benches/codspeed.rs).
+divan = { version = "5.0.2", package = "codspeed-divan-compat" }
+
 [package.metadata.verus]
 verify = true
 
@@ -26,6 +30,10 @@ unexpected_cfgs = { level = "warn", check-cfg = [
 ] }
 [[bench]]
 name = "per_move"
+harness = false
+
+[[bench]]
+name = "codspeed"
 harness = false
 
 # Benchmarks build like `release`, but with a single codegen unit so that unrelated

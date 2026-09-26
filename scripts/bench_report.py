@@ -137,6 +137,39 @@ def corpus_section(benches):
     return "\n".join(out)
 
 
+def lichess_section(benches):
+    by_id = {b["id"]: b for b in benches}
+    replay = by_id.get("lichess/replay")
+    rows = [
+        ("lichess/replay", "whole games: `legal_moves_exec` + `Game::play` + `Game::outcome`", "move"),
+        ("lichess/legal_moves", "`legal_moves_exec`", "position"),
+        ("lichess/is_legal", "`is_legal_exec`", "legal move"),
+        ("lichess/apply_move", "`apply_move_exec`", "legal move"),
+    ]
+    rows = [(by_id[i], what, unit) for i, what, unit in rows if i in by_id]
+    if not rows:
+        return ""
+    b = rows[0][0]
+    out = [
+        "### Real games (Lichess sample)",
+        "",
+        f"{b['games']} Lichess games, {b['plies']} plies, {b['positions']} positions, {b['moves']} legal moves "
+        "(`benches/data/lichess_games.txt`). Median per unit, ± half-width of its 95% bootstrap CI.",
+        "",
+        "| Benchmark | Times | Per |",
+        "|---|---|--:|",
+    ]
+    for b, what, unit in rows:
+        out.append(f"| `{b['id']}` | {what} | {with_ci(b)} / {unit} |")
+    out.append("")
+    if replay:
+        out += [
+            f"Replaying all {replay['games']} games takes **{fmt_ns(replay['median_ns'])}**.",
+            "",
+        ]
+    return "\n".join(out)
+
+
 def game_section(benches, game):
     step = ply_series(benches, game, "step")
     if not step:
@@ -148,7 +181,7 @@ def game_section(benches, game):
     total = sum(b["median_ns"] for b in step)
     legend = " · ".join(f"{SWATCH[i]} `{c}`" for i, c in enumerate(COMPONENTS) if comps[c])
     out = [
-        f"### Per-ply cost: `{game}` game ({len(step)} plies)",
+        f"### Per-ply cost: game [`{game}`](https://lichess.org/{game}) ({len(step)} plies)",
         "",
         "`step` = generate the legal moves, `Game::play` the move, then `Game::outcome` on the result: "
         "everything the engine does for one move.",
@@ -307,8 +340,8 @@ def methodology(env):
   shuffled order, so slow drift (thermal throttling, noisy neighbours) is spread across all benchmarks rather than
   biasing whichever ran during a bad stretch.
 * **No dead-code elimination.** Inputs and outputs go through `std::hint::black_box` on every iteration.
-* **Deterministic workloads.** Fixed FENs (move counts asserted against perft references), a fixed historical game,
-  and a seeded random game (seed {env['seed']}), so runs are comparable.
+* **Deterministic workloads.** Fixed FENs (move counts asserted against perft references) and a fixed sample of
+  100 real Lichess games, replayed and checked when the harness starts, so runs are comparable.
 * **Several processes.** {env['runs']} separate `cargo bench` invocation(s) per side. Heap placement and code
   layout differ between processes and can shift a benchmark by several percent, which samples within one
   process cannot reveal.
@@ -357,6 +390,7 @@ def main():
         base = load_all(args.baseline, rng)
         parts.append(comparison_section(cur, base, args.threshold, args.baseline_label, rng))
     parts.append(corpus_section(benches))
+    parts.append(lichess_section(benches))
     for g in games(benches):
         parts.append(game_section(benches, g))
     parts += [methodology(env), "", environment_table(env), ""]

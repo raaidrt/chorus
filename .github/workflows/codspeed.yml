@@ -1,0 +1,34 @@
+name: CodSpeed
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+  # Lets CodSpeed backtest the benchmarks on older commits.
+  workflow_dispatch:
+
+jobs:
+  benchmarks:
+    name: Run benchmarks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # OIDC authentication with CodSpeed (no CODSPEED_TOKEN secret needed).
+      id-token: write
+
+    steps:
+    - uses: actions/checkout@v5
+    - name: Install Rust and cargo-codspeed
+      uses: moonrepo/setup-rust@v1
+      with:
+        channel: stable
+        cache-target: release
+        bins: cargo-codspeed
+    # Only `benches/codspeed.rs` is written for CodSpeed; `per_move` is the local harness.
+    - name: Build the benchmarks
+      run: cargo codspeed build --bench codspeed
+    - name: Run the benchmarks
+      uses: CodSpeedHQ/action@v5
+      with:
+        mode: simulation
+        run: cargo codspeed run --bench codspeed
