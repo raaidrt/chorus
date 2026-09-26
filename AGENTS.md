@@ -8,7 +8,7 @@ to implement it. These rules are mandatory for any agent working in this reposit
 
 - `src/spec.rs` — the specification (the rules of chess as Verus `spec` functions).
 - `src/types.rs` — the data types the specification is stated over.
-- `AGENTS.md`, `CLAUDE.md`, `.claude/settings.json`, `.github/CODEOWNERS` — these guardrails.
+- `AGENTS.md`, `CLAUDE.md`, `.claude/settings.json` — these guardrails.
 
 Do not edit, move, rename, delete, reformat or regenerate these files, by any means
 (editor tools, shell commands, scripts, `git checkout`/`git apply`, …). If you believe

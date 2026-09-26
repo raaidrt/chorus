@@ -5,8 +5,7 @@
       "Edit(/src/types.rs)",
       "Edit(/AGENTS.md)",
       "Edit(/CLAUDE.md)",
-      "Edit(/.claude/settings.json)",
-      "Edit(/.github/CODEOWNERS)"
+      "Edit(/.claude/settings.json)"
     ]
   }
 }
