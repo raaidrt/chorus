@@ -1,7 +1,8 @@
 //! Move legality, making moves, and legal move generation — all proven to match `spec`.
 //!
 //! This is the straightforward "reference" implementation: legal move generation
-//! tries every (from, to, promotion) candidate and keeps the legal ones.
+//! tries every (from, to) candidate, with only the promotions `promotion_ok` admits,
+//! and keeps the legal ones.
 use crate::attacks::*;
 use crate::position::*;
 #[cfg(verus_only)]
