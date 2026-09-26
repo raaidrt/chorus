@@ -32,6 +32,7 @@ test the **spec itself**. `tests/game.rs` covers end-of-game rules.
 ```sh
 cargo verus verify         # verify
 cargo test --release       # perft + game tests
+cargo bench --bench per_move   # per-move timings, see benches/README.md
 ```
 
 Verus was installed from the binary release into `/root/verus` (on `PATH` via `~/.bashrc`),

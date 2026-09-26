@@ -24,3 +24,13 @@ verify = true
 unexpected_cfgs = { level = "warn", check-cfg = [
   'cfg(verus_only)',
 ] }
+[[bench]]
+name = "per_move"
+harness = false
+
+# Benchmarks build like `release`, but with a single codegen unit so that unrelated
+# edits don't reshuffle code layout (a common source of spurious few-percent changes),
+# and with line tables so `perf` can attribute samples.
+[profile.bench]
+codegen-units = 1
+debug = "line-tables-only"
