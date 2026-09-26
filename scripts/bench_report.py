@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
 """Turn `benches/per_move.rs` output into a Markdown report (GitHub-flavoured).
 
-    python3 scripts/bench_report.py target/bench/per_move.json [--baseline base.json] > report.md
+    python3 scripts/bench_report.py new-*.json [--baseline base-*.json] > report.md
 
 Tables and Mermaid `xychart-beta` charts render inline in GitHub PR descriptions,
-comments and job summaries. With `--baseline`, every benchmark is compared with a
-bootstrap confidence interval of the ratio of medians; a change is flagged only if
-that interval excludes zero change *and* the change is at least `--threshold` percent.
-Standard library only.
+comments and job summaries.
+
+Pass several JSON files (separate `cargo bench` invocations) per side: code layout and
+heap placement differ between processes and can shift a benchmark by several percent,
+which no amount of samples within one process reveals. Confidence intervals are then a
+hierarchical bootstrap (resample runs, then samples within each run).
+
+With `--baseline`, every benchmark is compared with a bootstrap confidence interval of
+the ratio of medians; a change is flagged only if that interval lies entirely beyond
+`--threshold` percent. Standard library only.
 """
 import argparse
 import json
@@ -181,22 +187,62 @@ def game_section(benches, game):
     return "\n".join(out)
 
 
-def ratio_ci(new, old, rng, resamples=2000):
-    """Percentile-bootstrap 95% CI of median(new) / median(old), from the raw samples."""
-    a, b = new["samples_ns"], old["samples_ns"]
-    ratios = sorted(
-        statistics.median(rng.choices(a, k=len(a))) / statistics.median(rng.choices(b, k=len(b)))
-        for _ in range(resamples)
+RESAMPLES = 1000
+
+
+def resample(runs, rng):
+    """One hierarchical bootstrap draw: pick runs with replacement, then samples within each."""
+    pooled = []
+    for run in rng.choices(runs, k=len(runs)):
+        pooled += rng.choices(run, k=len(run))
+    return statistics.median(pooled)
+
+
+def percentile_ci(draws):
+    draws.sort()
+    return draws[int(0.025 * len(draws))], draws[int(0.975 * len(draws)) - 1]
+
+
+def merge(runs_of_benches, rng):
+    """Combine the same benchmark from several runs: pooled median and p95, hierarchical CI."""
+    first = runs_of_benches[0]
+    if len(runs_of_benches) == 1:
+        return dict(first, runs=[first["samples_ns"]])
+    runs = [b["samples_ns"] for b in runs_of_benches]
+    pooled = sorted(x for r in runs for x in r)
+    per_iter = [x for r in runs for x in r]
+    return dict(
+        first,
+        runs=runs,
+        samples_ns=per_iter,
+        median_ns=statistics.median(pooled),
+        p95_ns=pooled[int(0.95 * (len(pooled) - 1))],
+        ci95_ns=list(percentile_ci([resample(runs, rng) for _ in range(RESAMPLES)])),
     )
-    return ratios[int(0.025 * resamples)], ratios[int(0.975 * resamples) - 1]
+
+
+def load_all(paths, rng):
+    datas = [load(p) for p in paths]
+    ids = [b["id"] for b in datas[0]["benchmarks"]]
+    by_run = [{b["id"]: b for b in d["benchmarks"]} for d in datas]
+    benches = [merge([r[i] for r in by_run if i in r], rng) for i in ids]
+    commits = {d["environment"]["git_commit"] for d in datas}
+    if len(commits) > 1:
+        sys.exit(f"{paths}: runs come from different commits {commits}")
+    env = dict(datas[0]["environment"], runs=len(datas))
+    return {"environment": env, "benchmarks": benches}
+
+
+def ratio_ci(new, old, rng):
+    """Hierarchical-bootstrap 95% CI of median(new) / median(old)."""
+    return percentile_ci([resample(new["runs"], rng) / resample(old["runs"], rng) for _ in range(RESAMPLES)])
 
 
 def geomean(xs):
     return statistics.geometric_mean(xs)
 
 
-def comparison_section(cur, base, threshold, label):
-    rng = random.Random(0)
+def comparison_section(cur, base, threshold, label, rng):
     base_by_id = {b["id"]: b for b in base["benchmarks"]}
     rows, verdicts = [], {"faster": 0, "slower": 0, "same": 0}
     for b in cur["benchmarks"]:
@@ -263,8 +309,12 @@ def methodology(env):
 * **No dead-code elimination.** Inputs and outputs go through `std::hint::black_box` on every iteration.
 * **Deterministic workloads.** Fixed FENs (move counts asserted against perft references), a fixed historical game,
   and a seeded random game (seed {env['seed']}), so runs are comparable.
-* **Robust statistics.** Median with a 95% percentile-bootstrap CI; outliers counted with Tukey's fences but kept.
-  Comparisons use a bootstrap CI of the ratio of medians and a minimum effect size.
+* **Several processes.** {env['runs']} separate `cargo bench` invocation(s) per side. Heap placement and code
+  layout differ between processes and can shift a benchmark by several percent, which samples within one
+  process cannot reveal.
+* **Robust statistics.** Median with a 95% hierarchical-bootstrap CI (resample runs, then samples within each
+  run); outliers counted with Tukey's fences but kept. Comparisons use a bootstrap CI of the ratio of medians
+  and a minimum effect size.
 * **Build.** `cargo bench` profile: release optimizations, `codegen-units = 1` (stable code layout), no debug assertions.
 </details>"""
 
@@ -284,26 +334,28 @@ def environment_table(env):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("current")
-    ap.add_argument("--baseline", help="JSON from an earlier run to compare against")
+    ap.add_argument("current", nargs="+", help="JSON output of one or more runs of the same commit")
+    ap.add_argument("--baseline", nargs="+", help="JSON from earlier runs to compare against")
     ap.add_argument("--baseline-label", default="baseline")
     ap.add_argument("--threshold", type=float, default=3.0, help="minimum change to flag, in percent")
     ap.add_argument("--title", default="Per-move benchmark")
     args = ap.parse_args()
 
-    cur = load(args.current)
+    rng = random.Random(0)
+    cur = load_all(args.current, rng)
     env, benches = cur["environment"], cur["benchmarks"]
     parts = [
         f"## {args.title}",
         "",
         f"`{env['git_commit'][:10]}` · {env['cpu']} ({env['logical_cpus']} CPUs) · {env['rustc']} · "
-        f"{env['samples']} samples × {len(benches)} benchmarks",
+        f"{env['runs']} run(s) × {env['samples']} samples × {len(benches)} benchmarks",
         "",
     ]
     if env.get("debug_assertions"):
         parts.append("> [!WARNING]\n> Built with debug assertions: these numbers are not representative.\n")
     if args.baseline:
-        parts.append(comparison_section(cur, load(args.baseline), args.threshold, args.baseline_label))
+        base = load_all(args.baseline, rng)
+        parts.append(comparison_section(cur, base, args.threshold, args.baseline_label, rng))
     parts.append(corpus_section(benches))
     for g in games(benches):
         parts.append(game_section(benches, g))

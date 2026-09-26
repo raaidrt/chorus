@@ -52,20 +52,31 @@ which costs a few ns and is included, instead of cloning the whole history each 
 
 ## Comparing two versions
 
-Run both versions on the same machine, back to back, and compare:
+**Use several processes per side, interleaved.** Heap placement and code layout change
+from one process to the next and can move a benchmark by several percent. In an A/A
+test (identical binaries), `Game::play` at ≈80 ns ran 8% slower in one of two processes
+on every ply, while the samples inside each process were tight. More samples per
+process can't expose that; more processes can. Build both versions first, then
+alternate between them so machine drift affects both sides equally. A git worktree
+keeps the baseline in its own checkout, so each run records the right commit:
 
 ```sh
-git checkout main       && cargo bench --bench per_move -- --out target/bench/base.json
-git checkout my-branch  && cargo bench --bench per_move -- --out target/bench/new.json
-python3 scripts/bench_report.py target/bench/new.json --baseline target/bench/base.json > report.md
+git worktree add ../base main
+out=$PWD/target/bench && mkdir -p "$out"
+(cd ../base && cargo bench --bench per_move --no-run) && cargo bench --bench per_move --no-run
+for i in 1 2 3; do
+  (cd ../base && cargo bench -q --bench per_move -- --out "$out/base-$i.json")
+  cargo bench -q --bench per_move -- --out "$out/new-$i.json"
+done
+python3 scripts/bench_report.py "$out"/new-*.json --baseline "$out"/base-*.json > report.md
 ```
 
-A change is flagged only when the bootstrap 95% CI of the ratio of medians lies entirely
-beyond `--threshold` (default ±3%). The report is GitHub Markdown with Mermaid charts,
-so it can be pasted straight into a PR description or comment.
+The report pools the runs and uses a hierarchical bootstrap (resample runs, then samples within each
+run) for all confidence intervals. It flags a change only when the 95% CI of the ratio
+of medians lies entirely beyond `--threshold` (default ±3%). The output is GitHub
+Markdown with Mermaid charts, so it can go straight into a PR description or comment.
 
-For quieter numbers: close other workloads, pin to one core (`taskset -c 2 cargo bench ...`),
-use the `performance` governor, and disable turbo if you can. On shared or virtual
-machines, expect 1–2% drift between separate runs even of identical code. Two
-identical runs on a 2-vCPU cloud VM flagged 8 of 636 benchmarks, all under 5%.
-Treat smaller changes as noise unless they reproduce.
+For quieter numbers: close other workloads, pin to one core (`taskset -c 2 ...`), use
+the `performance` governor, and disable turbo if you can. Before trusting a small change
+on a new machine, run an A/A comparison (the same binary on both sides) to see how
+large a change that machine flags by pure noise.
