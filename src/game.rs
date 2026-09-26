@@ -415,7 +415,7 @@ impl Game {
         ensures
             res == can_claim_draw(self@),
     {
-        self.current().halfmove_clock >= 100 || self.repetition_count() >= 3
+        self.outcome().is_none() && (self.current().halfmove_clock >= 100 || self.repetition_count() >= 3)
     }
 }
 

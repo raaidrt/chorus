@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "deny": [
+      "Edit(/src/spec.rs)",
+      "Edit(/src/types.rs)",
+      "Edit(/AGENTS.md)",
+      "Edit(/CLAUDE.md)",
+      "Edit(/.claude/settings.json)",
+      "Edit(/.github/CODEOWNERS)"
+    ]
+  }
+}

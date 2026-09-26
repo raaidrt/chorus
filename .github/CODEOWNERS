@@ -1,0 +1,7 @@
+# Changes to the specification or to the agent guardrails need the owner's review.
+/src/spec.rs            @raaidrt
+/src/types.rs           @raaidrt
+/AGENTS.md              @raaidrt
+/CLAUDE.md              @raaidrt
+/.claude/settings.json  @raaidrt
+/.github/CODEOWNERS     @raaidrt

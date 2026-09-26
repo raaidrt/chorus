@@ -597,16 +597,26 @@ pub open spec fn current(g: GameModel) -> PositionModel {
     g.history.last()
 }
 
-/// Each position arises from the previous one by a legal move.
+/// The game consisting of the first `n` positions of `g`.
+pub open spec fn game_prefix(g: GameModel, n: int) -> GameModel {
+    GameModel { history: g.history.take(n) }
+}
+
+/// Each position arises from the previous one by a legal move, and no move is
+/// made after the game has ended (FIDE 5.1.1, 5.2.1, 5.2.2, 9.6: these end the
+/// game immediately).
 pub open spec fn is_valid_game(g: GameModel) -> bool {
     &&& g.history.len() > 0
     &&& is_well_formed(g.history[0])
     &&& forall|i: int|
-        0 <= i < g.history.len() - 1 ==> exists|m: Move|
-            is_legal(g.history[i], m) && #[trigger] g.history[i + 1] == apply_move(
-                g.history[i],
-                m,
-            )
+        0 <= i < g.history.len() - 1 ==> {
+            &&& game_outcome(game_prefix(g, i + 1)) is None
+            &&& exists|m: Move|
+                is_legal(g.history[i], m) && #[trigger] g.history[i + 1] == apply_move(
+                    g.history[i],
+                    m,
+                )
+        }
 }
 
 /// Number of positions among the first `n` of `h` whose key equals `k`.
@@ -650,9 +660,12 @@ pub open spec fn game_outcome(g: GameModel) -> Option<GameOutcome> {
 }
 
 /// A player may claim a draw in the current position (FIDE 9.2 and 9.3).
+/// No claim is possible once the game has already ended (e.g. the last move gave
+/// checkmate, which takes precedence: FIDE 5.1.1, 9.6).
 /// (Claims made by announcing a move that would produce the condition are not modelled.)
 pub open spec fn can_claim_draw(g: GameModel) -> bool {
-    current(g).halfmove_clock >= 100 || repetition_count(g) >= 3
+    &&& game_outcome(g) is None
+    &&& current(g).halfmove_clock >= 100 || repetition_count(g) >= 3
 }
 
 } // verus!

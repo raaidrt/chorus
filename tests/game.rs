@@ -129,3 +129,11 @@ fn castling_rights_are_lost() {
     assert!(g.play(parse_uci_move("e1g1").unwrap()));
     assert_eq!(to_fen(g.current()), "R6r/4k3/8/8/8/8/8/5RK1 b - - 2 2");
 }
+
+#[test]
+fn no_draw_claim_after_checkmate() {
+    // Black is mated; the 50-move condition also holds, but checkmate ended the game.
+    let g = game("7k/6Q1/6K1/8/8/8/8/8 b - - 120 80");
+    assert_eq!(g.outcome(), Some(GameOutcome::Checkmate { winner: Color::White }));
+    assert!(!g.can_claim_draw());
+}
