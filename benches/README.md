@@ -112,7 +112,7 @@ instruments:
 
 | Benchmark | What it times |
 |---|---|
-| `reference::{legal_moves,is_legal,apply_move,outcome}[<pos>]` | the primitives on each perft position (`is_legal`/`apply_move`: all its legal moves) |
+| `reference::{legal_moves,has_legal_move,is_legal,apply_move,outcome}[<pos>]` | the primitives on each perft position (`is_legal`/`apply_move`: all its legal moves) |
 | `lichess::{legal_moves,is_legal,apply_move}` | the same primitives swept over every position of the Lichess sample |
 | `lichess::replay_all` | all 100 games replayed from the start |
 | `lichess::replay_game[<id>]` | one game replayed from the start |

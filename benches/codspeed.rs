@@ -10,7 +10,7 @@
 //! `cargo codspeed build --bench codspeed && cargo codspeed run --bench codspeed` runs them
 //! the way CI does.
 use chess_engine::game::Game;
-use chess_engine::movegen::{apply_move_exec, is_legal_exec, legal_moves_exec};
+use chess_engine::movegen::{apply_move_exec, has_legal_move_exec, is_legal_exec, legal_moves_exec};
 use chess_engine::position::Position;
 use chess_engine::types::Move;
 use divan::{black_box, Bencher};
@@ -61,6 +61,12 @@ mod reference {
     fn legal_moves(bencher: Bencher, name: &str) {
         let pos = position(name);
         bencher.bench(|| legal_moves_exec(black_box(&pos)));
+    }
+
+    #[divan::bench(args = POSITIONS)]
+    fn has_legal_move(bencher: Bencher, name: &str) {
+        let pos = position(name);
+        bencher.bench(|| has_legal_move_exec(black_box(&pos)));
     }
 
     /// `is_legal_exec` on every legal move of the position.

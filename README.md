@@ -14,9 +14,11 @@ A chess engine whose rules implementation is formally verified with [Verus](http
 | `src/game.rs` | `Game` history, `outcome()`, `can_claim_draw()`, repetition counting. | ✓ `== spec` |
 | `src/fen.rs` | FEN / UCI parsing and printing. | ✗ (I/O glue) |
 
-The implementation is deliberately naive (legal move generation tries every
-from/to candidate, with the promotions `promotion_ok` admits). It is the reference
-to optimize against later: any faster implementation only has to prove the same `ensures` clauses.
+Legal move generation enumerates from/to candidates with the promotions
+`promotion_ok` admits. Outcome detection shares that verified traversal but stops
+at the first candidate pair with a legal move, instead of building the complete
+move list. Castling rejects impossible destinations and missing rights before
+scanning for check. Further optimizations must prove the same public `ensures` clauses.
 
 Agents (and humans) working on the implementation must follow [`AGENTS.md`](AGENTS.md):
 the specification is read-only and every implementation must be proven against it.

@@ -127,6 +127,11 @@ fn castle_ok_exec(pos: &Position, m: Move) -> (res: bool)
     if !(m.from.file == 4 && m.from.rank as i32 == r && m.to.rank as i32 == r) {
         return false;
     }
+    // Reject impossible destinations and absent rights before scanning for check.
+    if !((m.to.file == 6 && has_kingside_right_exec(pos.castling, c))
+        || (m.to.file == 2 && has_queenside_right_exec(pos.castling, c))) {
+        return false;
+    }
     if in_check_exec(b, c) {
         return false;
     }
@@ -361,10 +366,15 @@ fn try_push(pos: &Position, m: Move, moves: &mut Vec<Move>)
     }
 }
 
-/// All legal moves, each exactly once.
-pub fn legal_moves_exec(pos: &Position) -> (moves: Vec<Move>)
+/// Enumerate legal moves, optionally stopping after the first nonempty candidate pair.
+/// The same traversal proves completeness for full generation and for an empty search.
+// Specialize the traversal for the two callers so full generation has no stop flag branch.
+#[inline(always)]
+fn collect_legal_moves(pos: &Position, stop_after_first: bool) -> (moves: Vec<Move>)
     ensures
-        forall|m: Move| #[trigger] moves@.contains(m) <==> is_legal(pos@, m),
+        forall|m: Move| #[trigger] moves@.contains(m) ==> is_legal(pos@, m),
+        !stop_after_first || moves@.len() == 0 ==>
+            forall|m: Move| #[trigger] moves@.contains(m) <==> is_legal(pos@, m),
         moves@.no_duplicates(),
 {
     let mut moves: Vec<Move> = Vec::new();
@@ -459,6 +469,9 @@ pub fn legal_moves_exec(pos: &Position) -> (moves: Vec<Move>)
                     }
                 }
             }
+            if stop_after_first && moves.len() > 0 {
+                return moves;
+            }
             j += 1;
         }
         proof {
@@ -487,11 +500,20 @@ pub fn legal_moves_exec(pos: &Position) -> (moves: Vec<Move>)
     moves
 }
 
+/// All legal moves, each exactly once.
+pub fn legal_moves_exec(pos: &Position) -> (moves: Vec<Move>)
+    ensures
+        forall|m: Move| #[trigger] moves@.contains(m) <==> is_legal(pos@, m),
+        moves@.no_duplicates(),
+{
+    collect_legal_moves(pos, false)
+}
+
 pub fn has_legal_move_exec(pos: &Position) -> (res: bool)
     ensures
         res == has_legal_move(pos@),
 {
-    let moves = legal_moves_exec(pos);
+    let moves = collect_legal_moves(pos, true);
     if moves.len() > 0 {
         assert(moves@.contains(moves@[0]));
         true
