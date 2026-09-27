@@ -1,8 +1,7 @@
 //! Move legality, making moves, and legal move generation — all proven to match `spec`.
 //!
-//! This is the straightforward "reference" implementation: legal move generation
-//! tries every (from, to) candidate, with only the promotions `promotion_ok` admits,
-//! and keeps the legal ones.
+//! Legal move generation restricts destination ranks to each piece's reach,
+//! tries only the promotions `promotion_ok` admits, and keeps the legal moves.
 use crate::attacks::*;
 use crate::position::*;
 #[cfg(verus_only)]
@@ -366,6 +365,39 @@ fn try_push(pos: &Position, m: Move, moves: &mut Vec<Move>)
     }
 }
 
+/// Restrict the destination scan to ranks reachable by this piece. Sliders retain
+/// the full board; pawns, knights and kings need only a small band of ranks.
+fn destination_band(pos: &Position, from: Square) -> (bounds: (u8, u8))
+    requires
+        valid_square(from),
+    ensures
+        bounds.0 <= bounds.1 <= 64,
+        forall|m: Move| #[trigger] is_legal(pos@, m) && m.from == from ==>
+            bounds.0 <= sq_index(m.to) < bounds.1,
+{
+    let p = match get_sq(&pos.board, from) {
+        Some(p) => p,
+        None => { return (64, 64); },
+    };
+    if !color_eq(p.color, pos.turn) {
+        return (64, 64);
+    }
+    let r = from.rank;
+    let (low, high) = match p.kind {
+        PieceKind::Pawn => {
+            if color_eq(p.color, Color::White) {
+                (r + 1, if r < 6 { r + 3 } else { 8 })
+            } else {
+                (if r >= 2 { r - 2 } else { 0 }, r)
+            }
+        },
+        PieceKind::Knight => (if r >= 2 { r - 2 } else { 0 }, if r < 6 { r + 3 } else { 8 }),
+        PieceKind::King => (if r >= 1 { r - 1 } else { 0 }, if r < 7 { r + 2 } else { 8 }),
+        _ => (0, 8),
+    };
+    (low * 8, high * 8)
+}
+
 /// Enumerate legal moves, optionally stopping after the first nonempty candidate pair.
 /// The same traversal proves completeness for full generation and for an empty search.
 // Specialize the traversal for the two callers so full generation has no stop flag branch.
@@ -393,29 +425,22 @@ fn collect_legal_moves(pos: &Position, stop_after_first: bool) -> (moves: Vec<Mo
         }
         assert(from == square_of_index(i as int));
         let piece = get_sq(&pos.board, from);
-        let own_piece = match piece {
-            Some(p) => color_eq(p.color, pos.turn),
-            None => false,
-        };
         let pawn = match piece {
             Some(p) => kind_eq(p.kind, PieceKind::Pawn),
             None => false,
         };
-        let mut j: u8 = 0;
-        // Squares without a piece of the side to move have no legal moves.
-        if !own_piece {
-            j = 64;
-        }
-        while j < 64
+        let (start, end) = destination_band(pos, from);
+        let mut j: u8 = start;
+        while j < end
             invariant
                 0 <= i < 64,
-                0 <= j <= 64,
+                0 <= start <= j <= end <= 64,
+                forall|m: Move| #[trigger] is_legal(pos@, m) && m.from == from ==>
+                    start <= sq_index(m.to) < end,
                 from == square_of_index(i as int),
                 sq_index(from) == i,
                 valid_square(from),
-                !own_piece ==> j == 64,
                 piece == piece_at(pos@.board, from),
-                own_piece == (piece matches Some(p) && p.color == pos.turn),
                 pawn == (piece matches Some(p) && p.kind == PieceKind::Pawn),
                 forall|m: Move| #[trigger] moves@.contains(m) <==> is_legal(pos@, m) && visited(m, i as int, j as int),
                 forall|k: int| 0 <= k < moves@.len() ==> visited(#[trigger] moves@[k], i as int, j as int),
