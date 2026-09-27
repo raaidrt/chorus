@@ -1146,17 +1146,16 @@ fn king_safe_exec(pos: &Position, ki: &KingInfo, m: Move, p: Piece) -> (res: boo
     }
     let df = m.from.file as i32 - ki.f;
     let dr = m.from.rank as i32 - ki.r;
-    if !ki.checked && !(df == 0 || dr == 0 || abs_exec(df) == abs_exec(dr)) && !is_en_passant_exec(
-        pos,
-        m,
-    ) {
+    // En passant also vacates the captured pawn's square, so it gets the full test.
+    let simple = !ki.checked && !is_en_passant_exec(pos, m);
+    if simple && !(df == 0 || dr == 0 || abs_exec(df) == abs_exec(dr)) {
         proof {
             lemma_discovered(pos@, m, p, ki.f as int, ki.r as int);
         }
         return true;
     }
     let nb = move_board_exec(pos, m);
-    if !ki.checked && !is_en_passant_exec(pos, m) {
+    if simple {
         // Only the line from the king through `from` can have opened.
         let sf: i32 = if df > 0 { 1 } else if df < 0 { -1 } else { 0 };
         let sr: i32 = if dr > 0 { 1 } else if dr < 0 { -1 } else { 0 };
