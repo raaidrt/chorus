@@ -14,8 +14,9 @@ A chess engine whose rules implementation is formally verified with [Verus](http
 | `src/game.rs` | `Game` history, `outcome()`, `can_claim_draw()`, repetition counting. | ✓ `== spec` |
 | `src/fen.rs` | FEN / UCI parsing and printing. | ✗ (I/O glue) |
 
-Legal move generation enumerates from/to candidates with the promotions
-`promotion_ok` admits. Outcome detection shares that verified traversal but stops
+Legal move generation limits pawn, knight, and king destinations to their reachable
+ranks, and enumerates only the promotions `promotion_ok` admits. The rank bounds
+are proven to include every legal move. Outcome detection shares that verified traversal but stops
 at the first candidate pair with a legal move, instead of building the complete
 move list. Castling rejects impossible destinations and missing rights before
 scanning for check. Further optimizations must prove the same public `ensures` clauses.
