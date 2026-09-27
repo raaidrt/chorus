@@ -49,6 +49,22 @@ pub proof fn lemma_bit_xor(x: u64, i: u64, j: u64)
     ;
 }
 
+/// `x` with bit `i` set.
+pub fn with_index(x: u64, i: i32) -> (y: u64)
+    requires
+        0 <= i < 64,
+    ensures
+        forall|j: int| 0 <= j < 64 ==> #[trigger] bit(y, j) == (bit(x, j) || j == i),
+{
+    let i = i as u64;
+    proof {
+        assert forall|j: int| 0 <= j < 64 implies #[trigger] bit(x | (1u64 << i), j) == (bit(x, j) || j == i) by {
+            lemma_bit_or(x, i, j as u64);
+        }
+    }
+    x | (1u64 << i)
+}
+
 /// `x` with the bit of (f, r) set.
 pub fn with_bit(x: u64, f: i32, r: i32) -> (y: u64)
     requires

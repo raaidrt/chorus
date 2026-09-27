@@ -443,12 +443,18 @@ impl Game {
         let ghost key = repetition_key(cur@);
         let ep = if en_passant_available_exec(cur) { cur.ep } else { None };
         assert(key == PositionKey { board: cur.board@, turn: cur.turn, castling: cur.castling, ep });
-        let occ = sparse_occupancy(&cur.board);
+        let n = self.history.len();
+        // The pre-check pays off only when there are many positions to compare with.
+        let occ = if n > 16 { sparse_occupancy(&cur.board) } else { 0 };
         let mut count: usize = 0;
         let mut i: usize = 0;
-        while i < self.history.len()
+        // The current position (the last one) matches itself; it is counted after the loop.
+        while i < n - 1
             invariant
-                0 <= i <= self.history@.len(),
+                n == self.history@.len(),
+                n > 0,
+                cur@ == self@.history[n - 1],
+                0 <= i <= n - 1,
                 count <= i,
                 count as nat == occurrences(self@.history, key, i as int),
                 key == (PositionKey { board: cur.board@, turn: cur.turn, castling: cur.castling, ep }),
@@ -459,7 +465,8 @@ impl Game {
             }
             i += 1;
         }
-        count
+        assert(repetition_key(self@.history[n - 1]) == key);
+        count + 1
     }
 
     /// The automatic result of the game, if it has ended.

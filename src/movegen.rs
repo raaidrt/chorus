@@ -678,12 +678,20 @@ fn ray_dests(pos: &Position, t: u64, f: i32, r: i32, df: i32, dr: i32) -> (y: u6
 {
     let b = &pos.board;
     let mut y = t;
-    let ghost mut k: int = 1;
-    let mut g = f + df;
-    let mut h = r + dr;
-    while 0 <= g && g < 8 && 0 <= h && h < 8
+    // Step one board index along the ray, for as many squares as it has.
+    let n = ray_len(f, r, df, dr);
+    let d = dr * 8 + df;
+    let mut k: i32 = 1;
+    let mut idx = r * 8 + f + d;
+    let ghost mut g: int = f + df;
+    let ghost mut h: int = r + dr;
+    while k <= n
         invariant
-            1 <= k <= 8,
+            1 <= k <= n + 1,
+            0 <= n <= 7,
+            forall|k2: int| k2 >= 1 ==> (#[trigger] on_board(step(f as int, df as int, k2), step(r as int, dr as int, k2)) <==> k2 <= n),
+            d == dr * 8 + df,
+            idx == index_of(g, h),
             b@ == pos@.board,
             on_board(f as int, r as int),
             unit_dir(df as int, dr as int),
@@ -701,17 +709,23 @@ fn ray_dests(pos: &Position, t: u64, f: i32, r: i32, df: i32, dr: i32) -> (y: u6
         decreases 8 - k,
     {
         let ghost y0 = y;
-        let occupied = get(b, g, h).is_some();
-        if !occupied || !has_color_exec(b, g, h, pos.turn) {
-            y = with_bit(y, g, h);
+        assert(on_board(g, h));
+        let sq = b[idx as usize];
+        let occupied = sq.is_some();
+        let free = match sq {
+            Some(q) => !color_eq(q.color, pos.turn),
+            None => true,
+        };
+        if free {
+            y = with_index(y, idx);
         }
         proof {
             assert forall|to: Square| valid_square(to) implies (#[trigger] bit(y, sq_index(to)) == (bit(y0, sq_index(to))
-                || (!(occupied && has_color(b@, g as int, h as int, pos.turn))
+                || (!(occupied && has_color(b@, g, h, pos.turn))
                     && in_dir(f as int, r as int, df as int, dr as int, to.file as int, to.rank as int)
                     && distance(to.file - f, to.rank - r) == k))) by {
                 lemma_index_square(to);
-                lemma_index_injective(to.file as int, to.rank as int, g as int, h as int);
+                lemma_index_injective(to.file as int, to.rank as int, g, h);
                 lemma_in_dir_step(f as int, r as int, df as int, dr as int, to.file as int, to.rank as int, k as int);
             }
         }
@@ -739,11 +753,12 @@ fn ray_dests(pos: &Position, t: u64, f: i32, r: i32, df: i32, dr: i32) -> (y: u6
             }
             return y;
         }
+        k += 1;
+        idx += d;
         proof {
-            k = k + 1;
+            g = g + df;
+            h = h + dr;
         }
-        g += df;
-        h += dr;
     }
     proof {
         assert forall|to: Square| valid_square(to) implies #[trigger] bit(y, sq_index(to)) == (bit(t, sq_index(to))
@@ -755,7 +770,8 @@ fn ray_dests(pos: &Position, t: u64, f: i32, r: i32, df: i32, dr: i32) -> (y: u6
                 let d = distance(f2 - f, r2 - r);
                 lemma_in_dir_step(f as int, r as int, df as int, dr as int, f2, r2, d);
                 lemma_path_clear_ray(b@, f as int, r as int, df as int, dr as int, d);
-                assert(d < k);
+                assert(on_board(step(f as int, df as int, d), step(r as int, dr as int, d)));
+                assert(d <= n);
                 assert(is_empty(b@, step(f as int, df as int, d), step(r as int, dr as int, d)));
             }
         }

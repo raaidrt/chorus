@@ -154,6 +154,20 @@ pub proof fn lemma_ray_blocked(b: Board, f: int, r: int, df: int, dr: int, m: in
     assert(!is_empty(b, step(g, f - g, k - m), step(h, r - h, k - m)));
 }
 
+/// The number of squares on the ray from (f, r) in direction (df, dr).
+pub fn ray_len(f: i32, r: i32, df: i32, dr: i32) -> (n: i32)
+    requires
+        on_board(f as int, r as int),
+        unit_dir(df as int, dr as int),
+    ensures
+        0 <= n <= 7,
+        forall|k: int| k >= 1 ==> (#[trigger] on_board(step(f as int, df as int, k), step(r as int, dr as int, k)) <==> k <= n),
+{
+    let nf = if df > 0 { 7 - f } else if df < 0 { f } else { 7 };
+    let nr = if dr > 0 { 7 - r } else if dr < 0 { r } else { 7 };
+    if nf < nr { nf } else { nr }
+}
+
 /// A pawn of color `by` one step from its target in direction (df, dr) attacks it.
 pub open spec fn pawn_dir(df: int, dr: int, by: Color) -> bool {
     df != 0 && dr == -forward(by)
@@ -187,12 +201,20 @@ pub fn ray_attacked_exec(b: &[Option<Piece>; 64], f: i32, r: i32, df: i32, dr: i
 {
     let diag = df != 0 && dr != 0;
     let pawn_near = near && df != 0 && dr == -forward_exec(by);
+    // Step one board index along the ray, for as many squares as it has.
+    let n = ray_len(f, r, df, dr);
+    let d = dr * 8 + df;
     let mut k: i32 = 1;
-    let mut g = f + df;
-    let mut h = r + dr;
-    while 0 <= g && g < 8 && 0 <= h && h < 8
+    let mut idx = r * 8 + f + d;
+    let ghost mut g: int = f + df;
+    let ghost mut h: int = r + dr;
+    while k <= n
         invariant
-            1 <= k <= 8,
+            1 <= k <= n + 1,
+            0 <= n <= 7,
+            forall|k2: int| k2 >= 1 ==> (#[trigger] on_board(step(f as int, df as int, k2), step(r as int, dr as int, k2)) <==> k2 <= n),
+            d == dr * 8 + df,
+            idx == index_of(g, h),
             on_board(f as int, r as int),
             unit_dir(df as int, dr as int),
             diag == (df != 0 && dr != 0),
@@ -207,11 +229,16 @@ pub fn ray_attacked_exec(b: &[Option<Piece>; 64], f: i32, r: i32, df: i32, dr: i
                 ),
         decreases 8 - k,
     {
-        match get(b, g, h) {
+        assert(on_board(g, h));
+        match b[idx as usize] {
             None => {
+                assert(is_empty(b@, g, h));
                 k += 1;
-                g += df;
-                h += dr;
+                idx += d;
+                proof {
+                    g = g + df;
+                    h = h + dr;
+                }
             },
             Some(p) => {
                 let hit = color_eq(p.color, by) && match p.kind {
@@ -229,7 +256,7 @@ pub fn ray_attacked_exec(b: &[Option<Piece>; 64], f: i32, r: i32, df: i32, dr: i
                     }
                     lemma_ray_path_clear(b@, f as int, r as int, df as int, dr as int, k as int);
                     if hit {
-                        assert(attacker_at(b@, g as int, h as int, f as int, r as int, by));
+                        assert(attacker_at(b@, g, h, f as int, r as int, by));
                     }
                     assert forall|k2: int|
                         k2 >= 1 && on_board(
@@ -283,6 +310,7 @@ pub fn ray_attacked_exec(b: &[Option<Piece>; 64], f: i32, r: i32, df: i32, dr: i
             r as int,
             by,
         ) by {
+            assert(k2 <= n);
             assert(k2 < k);
             assert(is_empty(b@, step(f as int, df as int, k2), step(r as int, dr as int, k2)));
         }
@@ -419,61 +447,46 @@ proof fn lemma_no_attacker(b: Board, f: int, r: int, by: Color)
     }
 }
 
-/// `p` is the king of color `c`. (Tests the kind first: on almost every square that is
-/// the only comparison made.)
-pub fn is_king_of(p: Option<Piece>, c: Color) -> (res: bool)
-    ensures
-        res == (p == Some(king_of(c))),
-{
-    match p {
-        Some(Piece { color, kind: PieceKind::King }) => color_eq(color, c),
-        _ => false,
-    }
-}
-
 /// Is the king of color `c` in check?
 pub fn in_check_exec(b: &[Option<Piece>; 64], c: Color) -> (res: bool)
     ensures
         res == in_check(b@, c),
 {
     let opp = opponent_exec(c);
-    let mut i: usize = 0;
-    while i < 64
+    let king = Piece { color: c, kind: PieceKind::King };
+    let mut r: i32 = 0;
+    while r < 8
         invariant
-            0 <= i <= 64,
+            0 <= r <= 8,
             opp == opponent(c),
-            forall|j: int|
-                0 <= j < i ==> !(#[trigger] b@[j] == Some(king_of(c)) && is_attacked(
-                    b@,
-                    j % 8,
-                    j / 8,
-                    opponent(c),
-                )),
-        decreases 64 - i,
+            king == king_of(c),
+            forall|f2: int, r2: int|
+                0 <= f2 < 8 && 0 <= r2 < r ==> !(#[trigger] at(b@, f2, r2) == Some(king_of(c))
+                    && is_attacked(b@, f2, r2, opponent(c))),
+        decreases 8 - r,
     {
-        if is_king_of(b[i], c) {
-            proof {
-                lemma_square_index(i as int);
-            }
-            if is_attacked_exec(b, (i % 8) as i32, (i / 8) as i32, opp) {
-                assert(at(b@, (i % 8) as int, (i / 8) as int) == Some(king_of(c)));
+        let mut f: i32 = 0;
+        while f < 8
+            invariant
+                0 <= f <= 8,
+                0 <= r < 8,
+                opp == opponent(c),
+                king == king_of(c),
+                forall|f2: int, r2: int|
+                    0 <= f2 < 8 && 0 <= r2 < r ==> !(#[trigger] at(b@, f2, r2) == Some(king_of(c))
+                        && is_attacked(b@, f2, r2, opponent(c))),
+                forall|f2: int|
+                    0 <= f2 < f ==> !(#[trigger] at(b@, f2, r as int) == Some(king_of(c))
+                        && is_attacked(b@, f2, r as int, opponent(c))),
+            decreases 8 - f,
+        {
+            if opt_piece_eq(get(b, f, r), Some(king)) && is_attacked_exec(b, f, r, opp) {
+                assert(on_board(f as int, r as int));
                 return true;
             }
+            f += 1;
         }
-        i += 1;
-    }
-    proof {
-        assert forall|f: int, r: int|
-            on_board(f, r) implies !(#[trigger] at(b@, f, r) == Some(king_of(c)) && is_attacked(
-                b@,
-                f,
-                r,
-                opponent(c),
-            )) by {
-            let j = index_of(f, r);
-            assert(j % 8 == f && j / 8 == r);
-            assert(!(b@[j] == Some(king_of(c)) && is_attacked(b@, j % 8, j / 8, opponent(c))));
-        }
+        r += 1;
     }
     false
 }
