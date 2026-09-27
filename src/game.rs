@@ -1,6 +1,5 @@
 //! Game-level rules: game history, repetition, draws and the game outcome,
 //! proven to match `spec::game_outcome` and `spec::can_claim_draw`.
-use crate::attacks::*;
 use crate::movegen::*;
 use crate::position::*;
 use crate::spec::*;
@@ -13,124 +12,81 @@ verus! {
 // Insufficient material
 // ---------------------------------------------------------------------------
 
-fn is_minor_exec(k: PieceKind) -> (r: bool)
+/// (f2, r2) comes before (f, r) in the scan order (rank by rank, file by file).
+pub open spec fn before(f2: int, r2: int, f: int, r: int) -> bool {
+    r2 < r || (r2 == r && f2 < f)
+}
+
+/// What the scan of `insufficient_material_exec` has seen of the squares before (f, r):
+/// only kings and minor pieces, `minors` minor pieces (counting stops at 2, with the
+/// first two at `w1`, `w2`), whether one is a knight (at `wk`), and whether bishops stand
+/// on dark (shade 0, at `wd`) or light (shade 1, at `wl`) squares.
+pub open spec fn scan_inv(
+    b: Board,
+    f: int,
+    r: int,
+    minors: int,
+    w1: (int, int),
+    w2: (int, int),
+    knight: bool,
+    wk: (int, int),
+    dark: bool,
+    wd: (int, int),
+    light: bool,
+    wl: (int, int),
+) -> bool {
+    &&& forall|f2: int, r2: int|
+        on_board(f2, r2) && before(f2, r2, f, r) ==> #[trigger] king_or_minor_or_empty(b, f2, r2)
+    &&& 0 <= minors <= 2
+    &&& minors == 0 ==> forall|f2: int, r2: int|
+        on_board(f2, r2) && before(f2, r2, f, r) ==> !#[trigger] minor_at(b, f2, r2)
+    &&& minors >= 1 ==> on_board(w1.0, w1.1) && before(w1.0, w1.1, f, r) && minor_at(b, w1.0, w1.1)
+    &&& minors == 1 ==> forall|f2: int, r2: int|
+        on_board(f2, r2) && before(f2, r2, f, r) && #[trigger] minor_at(b, f2, r2) ==> f2 == w1.0
+            && r2 == w1.1
+    &&& minors == 2 ==> on_board(w2.0, w2.1) && minor_at(b, w2.0, w2.1) && w2 != w1
+    &&& knight ==> on_board(wk.0, wk.1) && minor_at(b, wk.0, wk.1) && !bishop_at(b, wk.0, wk.1)
+    &&& !knight ==> forall|f2: int, r2: int|
+        on_board(f2, r2) && before(f2, r2, f, r) && #[trigger] minor_at(b, f2, r2) ==> bishop_at(
+            b,
+            f2,
+            r2,
+        )
+    &&& dark ==> on_board(wd.0, wd.1) && bishop_at(b, wd.0, wd.1) && minor_at(b, wd.0, wd.1)
+        && square_shade(wd.0, wd.1) == 0
+    &&& !dark ==> forall|f2: int, r2: int|
+        on_board(f2, r2) && before(f2, r2, f, r) && #[trigger] bishop_at(b, f2, r2) ==> square_shade(
+            f2,
+            r2,
+        ) != 0
+    &&& light ==> on_board(wl.0, wl.1) && bishop_at(b, wl.0, wl.1) && minor_at(b, wl.0, wl.1)
+        && square_shade(wl.0, wl.1) == 1
+    &&& !light ==> forall|f2: int, r2: int|
+        on_board(f2, r2) && before(f2, r2, f, r) && #[trigger] bishop_at(b, f2, r2) ==> square_shade(
+            f2,
+            r2,
+        ) != 1
+}
+
+/// One pass over the board: counts minor pieces and records knights and bishop shades.
+pub fn insufficient_material_exec(b: &[Option<Piece>; 64]) -> (res: bool)
     ensures
-        r == is_minor(k),
+        res == insufficient_material(b@),
 {
-    kind_eq(k, PieceKind::Knight) || kind_eq(k, PieceKind::Bishop)
-}
-
-fn minor_at_exec(b: &[Option<Piece>; 64], f: i32, r: i32) -> (res: bool)
-    requires
-        on_board(f as int, r as int),
-    ensures
-        res == minor_at(b@, f as int, r as int),
-{
-    match get(b, f, r) {
-        Some(p) => is_minor_exec(p.kind),
-        None => false,
-    }
-}
-
-fn bishop_at_exec(b: &[Option<Piece>; 64], f: i32, r: i32) -> (res: bool)
-    requires
-        on_board(f as int, r as int),
-    ensures
-        res == bishop_at(b@, f as int, r as int),
-{
-    match get(b, f, r) {
-        Some(p) => kind_eq(p.kind, PieceKind::Bishop),
-        None => false,
-    }
-}
-
-/// The pairwise conditions of `insufficient_material`
-/// (`shade == false`: "at most one minor"; `shade == true`: "same-shade bishops only").
-pub open spec fn pair_ok(b: Board, shade: bool, f1: int, r1: int, f2: int, r2: int) -> bool {
-    minor_at(b, f1, r1) && minor_at(b, f2, r2) ==> if shade {
-        bishop_at(b, f1, r1) && bishop_at(b, f2, r2) && square_shade(f1, r1) == square_shade(f2, r2)
-    } else {
-        f1 == f2 && r1 == r2
-    }
-}
-
-pub open spec fn pair_ok_idx(b: Board, shade: bool, i: int, j: int) -> bool {
-    pair_ok(b, shade, i % 8, i / 8, j % 8, j / 8)
-}
-
-fn pair_ok_exec(b: &[Option<Piece>; 64], shade: bool, i: i32, j: i32) -> (res: bool)
-    requires
-        0 <= i < 64,
-        0 <= j < 64,
-    ensures
-        res == pair_ok_idx(b@, shade, i as int, j as int),
-{
-    let (f1, r1, f2, r2) = (i % 8, i / 8, j % 8, j / 8);
-    if !(minor_at_exec(b, f1, r1) && minor_at_exec(b, f2, r2)) {
-        return true;
-    }
-    if shade {
-        bishop_at_exec(b, f1, r1) && bishop_at_exec(b, f2, r2) && (f1 + r1) % 2 == (f2 + r2) % 2
-    } else {
-        f1 == f2 && r1 == r2
-    }
-}
-
-fn all_pairs_ok(b: &[Option<Piece>; 64], shade: bool) -> (res: bool)
-    ensures
-        res == (forall|f1: int, r1: int, f2: int, r2: int|
-            on_board(f1, r1) && on_board(f2, r2) ==> #[trigger] pair_ok(b@, shade, f1, r1, f2, r2)),
-{
-    let mut i: i32 = 0;
-    while i < 64
-        invariant
-            0 <= i <= 64,
-            forall|i2: int, j2: int| 0 <= i2 < i && 0 <= j2 < 64 ==> #[trigger] pair_ok_idx(b@, shade, i2, j2),
-        decreases 64 - i,
-    {
-        let mut j: i32 = 0;
-        while j < 64
-            invariant
-                0 <= i < 64,
-                0 <= j <= 64,
-                forall|i2: int, j2: int| 0 <= i2 < i && 0 <= j2 < 64 ==> #[trigger] pair_ok_idx(b@, shade, i2, j2),
-                forall|j2: int| 0 <= j2 < j ==> #[trigger] pair_ok_idx(b@, shade, i as int, j2),
-            decreases 64 - j,
-        {
-            if !pair_ok_exec(b, shade, i, j) {
-                proof {
-                    lemma_square_index(i as int);
-                    lemma_square_index(j as int);
-                }
-                assert(!pair_ok_idx(b@, shade, i as int, j as int));
-                return false;
-            }
-            j += 1;
-        }
-        i += 1;
-    }
-    proof {
-        assert forall|f1: int, r1: int, f2: int, r2: int|
-            on_board(f1, r1) && on_board(f2, r2) implies #[trigger] pair_ok(b@, shade, f1, r1, f2, r2) by {
-            let i1 = index_of(f1, r1);
-            let j1 = index_of(f2, r2);
-            assert(i1 % 8 == f1 && i1 / 8 == r1);
-            assert(j1 % 8 == f2 && j1 / 8 == r2);
-            assert(pair_ok_idx(b@, shade, i1, j1));
-        }
-    }
-    true
-}
-
-fn only_kings_and_minors(b: &[Option<Piece>; 64]) -> (res: bool)
-    ensures
-        res == (forall|f: int, r: int| on_board(f, r) ==> #[trigger] king_or_minor_or_empty(b@, f, r)),
-{
+    let mut minors: u8 = 0;
+    let mut knight = false;
+    let mut dark = false;
+    let mut light = false;
+    let ghost mut w1: (int, int) = (0, 0);
+    let ghost mut w2: (int, int) = (0, 0);
+    let ghost mut wk: (int, int) = (0, 0);
+    let ghost mut wd: (int, int) = (0, 0);
+    let ghost mut wl: (int, int) = (0, 0);
     let mut r: i32 = 0;
     while r < 8
         invariant
             0 <= r <= 8,
-            forall|f2: int, r2: int| 0 <= f2 < 8 && 0 <= r2 < r ==> #[trigger] king_or_minor_or_empty(b@, f2, r2),
+            scan_inv(b@, 0, r as int, minors as int, w1, w2, knight, wk, dark, wd, light, wl),
         decreases 8 - r,
     {
         let mut f: i32 = 0;
@@ -138,71 +94,93 @@ fn only_kings_and_minors(b: &[Option<Piece>; 64]) -> (res: bool)
             invariant
                 0 <= f <= 8,
                 0 <= r < 8,
-                forall|f2: int, r2: int| 0 <= f2 < 8 && 0 <= r2 < r ==> #[trigger] king_or_minor_or_empty(b@, f2, r2),
-                forall|f2: int| 0 <= f2 < f ==> #[trigger] king_or_minor_or_empty(b@, f2, r as int),
+                scan_inv(b@, f as int, r as int, minors as int, w1, w2, knight, wk, dark, wd, light, wl),
             decreases 8 - f,
         {
-            let ok = match get(&b, f, r) {
-                Some(p) => kind_eq(p.kind, PieceKind::King) || is_minor_exec(p.kind),
-                None => true,
-            };
-            if !ok {
-                assert(!king_or_minor_or_empty(b@, f as int, r as int));
-                return false;
+            let ghost (m0, k0, d0, l0) = (minors, knight, dark, light);
+            let ghost (w10, w20, wk0, wd0, wl0) = (w1, w2, wk, wd, wl);
+            match get(b, f, r) {
+                None => {},
+                Some(p) => {
+                    let is_knight = kind_eq(p.kind, PieceKind::Knight);
+                    let is_bishop = kind_eq(p.kind, PieceKind::Bishop);
+                    if !is_knight && !is_bishop {
+                        if !kind_eq(p.kind, PieceKind::King) {
+                            assert(!king_or_minor_or_empty(b@, f as int, r as int));
+                            return false;
+                        }
+                    } else {
+                        if minors == 0 {
+                            proof {
+                                w1 = (f as int, r as int);
+                            }
+                            minors = 1;
+                        } else if minors == 1 {
+                            proof {
+                                w2 = (f as int, r as int);
+                            }
+                            minors = 2;
+                        }
+                        if is_knight {
+                            proof {
+                                wk = (f as int, r as int);
+                            }
+                            knight = true;
+                        } else if (f + r) % 2 == 0 {
+                            proof {
+                                wd = (f as int, r as int);
+                            }
+                            dark = true;
+                        } else {
+                            proof {
+                                wl = (f as int, r as int);
+                            }
+                            light = true;
+                        }
+                    }
+                },
+            }
+            proof {
+                assert(scan_inv(b@, f + 1, r as int, minors as int, w1, w2, knight, wk, dark, wd, light, wl)) by {
+                    assert forall|f2: int, r2: int| on_board(f2, r2) && #[trigger] before(f2, r2, f + 1, r as int)
+                        && !before(f2, r2, f as int, r as int) implies f2 == f && r2 == r by {}
+                }
             }
             f += 1;
         }
+        proof {
+            assert forall|f2: int, r2: int| on_board(f2, r2) implies #[trigger] before(f2, r2, 8, r as int) == before(f2, r2, 0, r + 1) by {}
+        }
         r += 1;
     }
-    true
-}
-
-pub fn insufficient_material_exec(b: &[Option<Piece>; 64]) -> (res: bool)
-    ensures
-        res == insufficient_material(b@),
-{
-    let res = only_kings_and_minors(b) && (all_pairs_ok(b, false) || all_pairs_ok(b, true));
+    let res = minors <= 1 || (!knight && !(dark && light));
     proof {
-        // Relate the `pair_ok` formulation to the one in the spec.
+        assert forall|f2: int, r2: int| on_board(f2, r2) implies #[trigger] before(f2, r2, 0, 8) by {}
+        let b = b@;
         let one = forall|f1: int, r1: int, f2: int, r2: int|
-            on_board(f1, r1) && on_board(f2, r2) ==> #[trigger] pair_ok(b@, false, f1, r1, f2, r2);
-        let spec_one = forall|f1: int, r1: int, f2: int, r2: int|
-            on_board(f1, r1) && on_board(f2, r2) && #[trigger] minor_at(b@, f1, r1)
-                && #[trigger] minor_at(b@, f2, r2) ==> f1 == f2 && r1 == r2;
-        assert(one == spec_one) by {
-            if spec_one {
-                assert forall|f1: int, r1: int, f2: int, r2: int|
-                    on_board(f1, r1) && on_board(f2, r2) implies #[trigger] pair_ok(b@, false, f1, r1, f2, r2) by {
-                    if minor_at(b@, f1, r1) && minor_at(b@, f2, r2) {}
-                }
-            }
-            if one {
-                assert forall|f1: int, r1: int, f2: int, r2: int|
-                    on_board(f1, r1) && on_board(f2, r2) && #[trigger] minor_at(b@, f1, r1)
-                        && #[trigger] minor_at(b@, f2, r2) implies f1 == f2 && r1 == r2 by {
-                    assert(pair_ok(b@, false, f1, r1, f2, r2));
-                }
+            on_board(f1, r1) && on_board(f2, r2) && #[trigger] minor_at(b, f1, r1)
+                && #[trigger] minor_at(b, f2, r2) ==> f1 == f2 && r1 == r2;
+        let shade = forall|f1: int, r1: int, f2: int, r2: int|
+            on_board(f1, r1) && on_board(f2, r2) && #[trigger] minor_at(b, f1, r1)
+                && #[trigger] minor_at(b, f2, r2) ==> bishop_at(b, f1, r1) && bishop_at(b, f2, r2)
+                && square_shade(f1, r1) == square_shade(f2, r2);
+        assert(one == (minors <= 1)) by {
+            if minors == 2 {
+                assert(minor_at(b, w1.0, w1.1) && minor_at(b, w2.0, w2.1));
             }
         }
-        let shade = forall|f1: int, r1: int, f2: int, r2: int|
-            on_board(f1, r1) && on_board(f2, r2) ==> #[trigger] pair_ok(b@, true, f1, r1, f2, r2);
-        let spec_shade = forall|f1: int, r1: int, f2: int, r2: int|
-            on_board(f1, r1) && on_board(f2, r2) && #[trigger] minor_at(b@, f1, r1)
-                && #[trigger] minor_at(b@, f2, r2) ==> bishop_at(b@, f1, r1) && bishop_at(b@, f2, r2)
-                && square_shade(f1, r1) == square_shade(f2, r2);
-        assert(shade == spec_shade) by {
-            if spec_shade {
+        assert(shade == (!knight && !(dark && light))) by {
+            if knight {
+                assert(minor_at(b, wk.0, wk.1));
+            } else if dark && light {
+                assert(minor_at(b, wd.0, wd.1) && minor_at(b, wl.0, wl.1));
+            } else {
                 assert forall|f1: int, r1: int, f2: int, r2: int|
-                    on_board(f1, r1) && on_board(f2, r2) implies #[trigger] pair_ok(b@, true, f1, r1, f2, r2) by {
-                    if minor_at(b@, f1, r1) && minor_at(b@, f2, r2) {}
-                }
-            }
-            if shade {
-                assert forall|f1: int, r1: int, f2: int, r2: int|
-                    on_board(f1, r1) && on_board(f2, r2) && #[trigger] minor_at(b@, f1, r1)
-                        && #[trigger] minor_at(b@, f2, r2) implies bishop_at(b@, f1, r1)
-                        && bishop_at(b@, f2, r2) && square_shade(f1, r1) == square_shade(f2, r2) by {
-                    assert(pair_ok(b@, true, f1, r1, f2, r2));
+                    on_board(f1, r1) && on_board(f2, r2) && #[trigger] minor_at(b, f1, r1)
+                        && #[trigger] minor_at(b, f2, r2) implies bishop_at(b, f1, r1) && bishop_at(b, f2, r2)
+                        && square_shade(f1, r1) == square_shade(f2, r2) by {
+                    assert(bishop_at(b, f1, r1) && bishop_at(b, f2, r2));
+                    assert(0 <= square_shade(f1, r1) <= 1 && 0 <= square_shade(f2, r2) <= 1);
                 }
             }
         }
@@ -214,66 +192,161 @@ pub fn insufficient_material_exec(b: &[Option<Piece>; 64]) -> (res: bool)
 // Repetition
 // ---------------------------------------------------------------------------
 
+/// Whether some move of the pawn on `from` to `to` is a legal en-passant capture.
+fn en_passant_from(pos: &Position, from: Square, to: Square) -> (res: bool)
+    requires
+        valid_square(from),
+        valid_square(to),
+    ensures
+        res == exists|m: Move| #![trigger is_legal(pos@, m)]
+            m.from == from && m.to == to && is_legal(pos@, m) && is_en_passant(pos@, m),
+{
+    let promotes = to.rank as i32 == promotion_rank_exec(pos.turn);
+    let n = Move { from, to, promotion: Some(PieceKind::Knight) };
+    let b = Move { from, to, promotion: Some(PieceKind::Bishop) };
+    let r = Move { from, to, promotion: Some(PieceKind::Rook) };
+    let q = Move { from, to, promotion: Some(PieceKind::Queen) };
+    let none = Move { from, to, promotion: None };
+    let res = if promotes {
+        (is_legal_exec(pos, n) && is_en_passant_exec(pos, n)) || (is_legal_exec(pos, b) && is_en_passant_exec(pos, b))
+            || (is_legal_exec(pos, r) && is_en_passant_exec(pos, r)) || (is_legal_exec(pos, q) && is_en_passant_exec(pos, q))
+    } else {
+        is_legal_exec(pos, none) && is_en_passant_exec(pos, none)
+    };
+    proof {
+        assert forall|m: Move| m.from == from && m.to == to && #[trigger] is_legal(pos@, m) && is_en_passant(pos@, m)
+            implies res by {
+            lemma_legal_promotion(pos@, m);
+            if promotes {
+                assert(m == n || m == b || m == r || m == q);
+            } else {
+                assert(m == none);
+            }
+        }
+    }
+    res
+}
+
+/// Only the (at most two) pawns diagonally behind the en-passant square can capture onto it.
 pub fn en_passant_available_exec(pos: &Position) -> (res: bool)
     ensures
         res == en_passant_available(pos@),
 {
-    if pos.ep.is_none() {
+    let s = match pos.ep {
+        None => {
+            return false;
+        },
+        Some(s) => s,
+    };
+    let r1 = s.rank as i32 - forward_exec(pos.turn);
+    if !(s.file < 8 && s.rank < 8 && 0 <= r1 && r1 < 8) {
+        proof {
+            assert forall|m: Move| !(is_legal(pos@, m) && #[trigger] is_en_passant(pos@, m)) by {
+                if is_legal(pos@, m) && is_en_passant(pos@, m) {
+                    assert(m.to == s);
+                }
+            }
+        }
         return false;
     }
-    let moves = legal_moves_exec(pos);
-    let mut k: usize = 0;
-    while k < moves.len()
-        invariant
-            0 <= k <= moves@.len(),
-            forall|m: Move| #[trigger] moves@.contains(m) <==> is_legal(pos@, m),
-            forall|k2: int| 0 <= k2 < k ==> !is_en_passant(pos@, #[trigger] moves@[k2]),
-        decreases moves@.len() - k,
-    {
-        let m = moves[k];
-        assert(moves@.contains(m));
-        proof {
-            lemma_legal_promotion(pos@, m);
-        }
-        if is_en_passant_exec(pos, m) {
-            return true;
-        }
-        k += 1;
-    }
-    assert forall|m: Move| !(is_legal(pos@, m) && is_en_passant(pos@, m)) by {
-        if is_legal(pos@, m) {
-            assert(moves@.contains(m));
+    let f = s.file as i32;
+    let left = f >= 1 && en_passant_from(pos, Square { file: (f - 1) as u8, rank: r1 as u8 }, s);
+    let right = f <= 6 && en_passant_from(pos, Square { file: (f + 1) as u8, rank: r1 as u8 }, s);
+    proof {
+        assert forall|m: Move| is_legal(pos@, m) && #[trigger] is_en_passant(pos@, m) implies left || right by {
+            assert(m.to == s);
+            if m.from.file as int == f - 1 {
+                assert(m.from == Square { file: (f - 1) as u8, rank: r1 as u8 });
+            } else {
+                assert(m.from == Square { file: (f + 1) as u8, rank: r1 as u8 });
+            }
         }
     }
-    false
+    left || right
 }
 
 fn board_eq(a: &[Option<Piece>; 64], b: &[Option<Piece>; 64]) -> (res: bool)
     ensures
         res == (a@ == b@),
 {
+    // Eight squares at a time.
     let mut i: usize = 0;
     while i < 64
         invariant
             0 <= i <= 64,
+            i % 8 == 0,
             forall|j: int| 0 <= j < i ==> a@[j] == b@[j],
         decreases 64 - i,
     {
-        if !opt_piece_eq(a[i], b[i]) {
+        let eq = opt_piece_eq(a[i], b[i]) && opt_piece_eq(a[i + 1], b[i + 1]) && opt_piece_eq(
+            a[i + 2],
+            b[i + 2],
+        ) && opt_piece_eq(a[i + 3], b[i + 3]) && opt_piece_eq(a[i + 4], b[i + 4]) && opt_piece_eq(
+            a[i + 5],
+            b[i + 5],
+        ) && opt_piece_eq(a[i + 6], b[i + 6]) && opt_piece_eq(a[i + 7], b[i + 7]);
+        if !eq {
             return false;
         }
-        i += 1;
+        i += 8;
     }
     assert(a@ =~= b@);
     true
 }
 
+/// The bitboard of the occupied squares of `b`, if it has at most 16 pieces (else 0).
+///
+/// On a sparse board, a difference from an earlier position almost always shows on an
+/// occupied square, while a square-by-square comparison runs through the empty ones.
+fn sparse_occupancy(b: &[Option<Piece>; 64]) -> (occ: u64) {
+    let mut occ: u64 = 0;
+    let mut n: u32 = 0;
+    let mut i: u64 = 0;
+    while i < 64
+        invariant
+            n <= i <= 64,
+        decreases 64 - i,
+    {
+        if b[i as usize].is_some() {
+            occ = occ | (1u64 << i);
+            n += 1;
+        }
+        i += 1;
+    }
+    if n <= 16 { occ } else { 0 }
+}
+
+/// A quick test that finds most differences between sparse boards: whether they differ on
+/// one of the squares of `occ` (in practice, the squares occupied on one of them).
+fn differ_on(a: &[Option<Piece>; 64], b: &[Option<Piece>; 64], occ: u64) -> (res: bool)
+    ensures
+        res ==> a@ != b@,
+{
+    let mut rem = occ;
+    while rem != 0
+        decreases rem,
+    {
+        proof {
+            vstd::std_specs::bits::axiom_u64_trailing_zeros(rem);
+        }
+        let j = rem.trailing_zeros() as usize;
+        if !opt_piece_eq(a[j], b[j]) {
+            return true;
+        }
+        assert(rem != 0 ==> rem & sub(rem, 1) < rem) by (bit_vector);
+        rem = rem & (rem - 1);
+    }
+    false
+}
+
 /// The key for the repetition rule; `ep` is the *effective* en-passant square.
-fn key_matches(p: &Position, board: &[Option<Piece>; 64], turn: Color, castling: CastlingRights, ep: Option<Square>) -> (res: bool)
+/// `occ` only speeds up the board comparison.
+fn key_matches(p: &Position, board: &[Option<Piece>; 64], occ: u64, turn: Color, castling: CastlingRights, ep: Option<Square>) -> (res: bool)
     ensures
         res == (repetition_key(p@) == PositionKey { board: board@, turn, castling, ep }),
 {
-    if !(color_eq(p.turn, turn) && castling_eq(p.castling, castling) && board_eq(&p.board, board)) {
+    if !(color_eq(p.turn, turn) && castling_eq(p.castling, castling)) || differ_on(&p.board, board, occ)
+        || !board_eq(&p.board, board) {
         return false;
     }
     let p_ep = if en_passant_available_exec(p) { p.ep } else { None };
@@ -344,11 +417,16 @@ impl Game {
             ok ==> final(self)@.history == old(self)@.history.push(apply_move(current(old(self)@), m)),
             !ok ==> final(self)@ == old(self)@,
     {
-        let pos = *self.current();
-        if !(is_legal_exec(&pos, m) && pos.halfmove_clock < u32::MAX && pos.fullmove_number < u32::MAX) {
+        let pos = self.current();
+        if !(pos.halfmove_clock < u32::MAX && pos.fullmove_number < u32::MAX) {
             return false;
         }
-        let next = apply_move_exec(&pos, m);
+        let next = match try_apply_move_exec(pos, m) {
+            Some(next) => next,
+            None => {
+                return false;
+            },
+        };
         self.history.push(next);
         assert(self@.history =~= old(self)@.history.push(apply_move(current(old(self)@), m)));
         true
@@ -365,6 +443,7 @@ impl Game {
         let ghost key = repetition_key(cur@);
         let ep = if en_passant_available_exec(cur) { cur.ep } else { None };
         assert(key == PositionKey { board: cur.board@, turn: cur.turn, castling: cur.castling, ep });
+        let occ = sparse_occupancy(&cur.board);
         let mut count: usize = 0;
         let mut i: usize = 0;
         while i < self.history.len()
@@ -375,7 +454,7 @@ impl Game {
                 key == (PositionKey { board: cur.board@, turn: cur.turn, castling: cur.castling, ep }),
             decreases self.history@.len() - i,
         {
-            if key_matches(&self.history[i], &cur.board, cur.turn, cur.castling, ep) {
+            if key_matches(&self.history[i], &cur.board, occ, cur.turn, cur.castling, ep) {
                 count += 1;
             }
             i += 1;
@@ -391,8 +470,7 @@ impl Game {
             o == game_outcome(self@),
     {
         let pos = self.current();
-        let check = in_check_exec(&pos.board, pos.turn);
-        let any_move = has_legal_move_exec(pos);
+        let (check, any_move) = check_status_exec(pos);
         if check && !any_move {
             Some(GameOutcome::Checkmate { winner: opponent_exec(pos.turn) })
         } else if !check && !any_move {
